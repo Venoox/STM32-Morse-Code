@@ -22,8 +22,7 @@
 // constants here for code readability.
 
 // Constants
-.equ     LEDDELAY,      100000
-
+.equ     LEDDELAY,      4000
 // Register Addresses
 // You can find the base addresses for all peripherals from Memory Map section
 // RM0090 on page 64. Then the offsets can be found on their relevant sections.
@@ -38,6 +37,20 @@
 .equ     GPIOD_MODER,   0x40020C00 // GPIOD port mode register (page 281)
 .equ     GPIOD_ODR,     0x40020C14 // GPIOD output data register (page 283)
 
+.equ     RCC_BASE, 0x40023800
+.equ	 RCC_APB1ENR, 0x40
+
+.equ	 TIM6_BASE,    0x40001000
+.equ     TIM6_CR1,     0x00 // control register
+.equ     TIM6_CNT,     0x24 // timer value
+.equ     TIM6_PSC,     0x28 // prescaler
+.equ     TIM6_ARR,     0x2c // autoreload
+.equ     TIM6_EGR,     0x14
+.equ     TIM6_SR,      0x10
+
+.equ	 STK_BASE, 0xE000E010
+.equ	 STK_CTRL, 0x00
+.equ	 STK_LOAD, 0x04
 // Start of text section
 .section .text
 ///////////////////////////////////////////////////////////////////////////////
@@ -53,31 +66,124 @@
 ///////////////////////////////////////////////////////////////////////////////
 
 _start:
+	bl INIT_IO
+	bl INIT_TIM6
+	bl INIT_SYSTICK
+	ldr r8, =TIM6_BASE
+loop_led:
+	mov r0, #500
+	bl DELAY_TIM6
+	bl LED_ON
+	mov r0, #500
+	bl DELAY_TIM6
+	bl LED_OFF
+	b loop_led
+
+
+INIT_IO:
+	stmfd r13!, {r5-r6, lr}
 	// Enable GPIOD Peripheral Clock (bit 3 in AHB1ENR register)
 	ldr r6, = RCC_AHB1ENR       // Load peripheral clock reg address to r6
 	ldr r5, [r6]                // Read its content to r5
 	orr r5, #0x00000008          // Set bit 3 to enable GPIOD clock
 	str r5, [r6]                // Store result in peripheral clock register
 
-	// Make GPIOD Pin12 as output pin (bits 25:24 in MODER register)
+	// Make GPIOD Pin12 as output pin (bits 26:27 in MODER register)
 	ldr r6, = GPIOD_MODER       // Load GPIOD MODER register address to r6
 	ldr r5, [r6]                // Read its content to r5
-	and r5, #0xFCFFFFFF          // Clear bits 24, 25 for P12
-	orr r5, #0x01000000          // Write 01 to bits 24, 25 for P12
+	bic r5, #0x0C000000          // Clear bits 26, 27 for P12
+	orr r5, #0x04000000         // Write 01 to bits 26, 27 for P12
 	str r5, [r6]                // Store result in GPIOD MODER register
+	ldmfd r13!, {r5-r6, pc}
 
-	// Set GPIOD Pin12 to 1 (bit 12 in ODR register)
+INIT_TIM6:
+	stmfd r13!, {r0-r2, lr}
+
+	ldr r0, =RCC_BASE
+	ldr r1, [r0, #RCC_APB1ENR]
+	ldr r2, =0x10
+	orr r1, r1, r2
+	str r1, [r0, #RCC_APB1ENR]
+
+	ldr r0, =TIM6_BASE
+
+	ldr r1, =16800
+	str r1, [r0, #TIM6_PSC]
+
+
+	ldmfd r13!, {r0-r2, pc}
+
+INIT_SYSTICK:
+	stmfd r13!, {r0-r2, lr}
+
+	ldr r0, =STK_BASE
+
+	ldr r1, =15999
+	str r1, [r0, #STK_LOAD]
+
+	ldr r1, [r0, #STK_CTRL]
+	ldr r2, =0x5
+	orr r1, r1, r2
+	str r1, [r0, #STK_CTRL]
+
+	ldmfd r13!, {r0-r2, pc}
+
+
+LED_ON:
+	stmfd r13!, {r5-r6, lr}
+	// Set GPIOD Pin13 to 1 (bit 13 in ODR register)
 	ldr r6, = GPIOD_ODR         // Load GPIOD output data register
 	ldr r5, [r6]                // Read its content to r5
-	orr r5, #0x1000              // write 1 to pin 12
+	orr r5, #0x2000              // write 1 to pin 13
 	str r5, [r6]                // Store result in GPIOD output data register
+	ldmfd r13!, {r5-r6, pc}
 
-	// Set GPIOD Pin12 to 0 (bit 12 in ODR register)
+LED_OFF:
+	stmfd r13!, {r5-r6, lr}
+	// Set GPIOD Pin13 to 1 (bit 13 in ODR register)
 	ldr r6, = GPIOD_ODR         // Load GPIOD output data register
 	ldr r5, [r6]                // Read its content to r5
-	and r5, #0xFFFFEFFF          // write 0 to pin 12
+	bic r5, #0x2000              // write 1 to pin 13
 	str r5, [r6]                // Store result in GPIOD output data register
+	ldmfd r13!, {r5-r6, pc}
 
-loop:
-	nop                         // No operation. Do nothing.
-	b loop                      // Jump to loop
+DELAY_STK:
+	stmfd r13!, {r1-r2, lr}
+	ldr r1, =STK_BASE
+	loop2:
+		ldr r2, [r1, #STK_CTRL]
+		and r2, r2, #0x10000
+		cmp r2, #0x10000
+		bne loop2
+		subs r0, r0, #1
+		bne loop2
+
+	ldmfd r13!, {r1-r2, pc}
+
+DELAY_TIM6:
+	stmfd r13!, {r1-r3, lr}
+
+	ldr r2, =0
+	str r2, [r8, #TIM6_SR]
+
+	str r0, [r8, #TIM6_ARR]
+
+	ldr r2, =0x09
+	str r2, [r8, #TIM6_CR1]
+
+	loop1:
+		ldr r2, [r8, #TIM6_SR]
+		cmp r2, #1
+		bne loop1
+
+	ldmfd r13!, {r1-r3, pc}
+
+DELAY:
+	stmfd r13!, {r1, lr}
+	MSEC: ldr r1, =LEDDELAY
+	LOOP:    subs r1, r1, 1
+	         bne LOOP
+	      subs r0, r0, 1
+	      bne MSEC
+
+	ldmfd r13!, {r1, pc}
